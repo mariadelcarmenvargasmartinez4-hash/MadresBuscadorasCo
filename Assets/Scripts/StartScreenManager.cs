@@ -193,12 +193,12 @@ public class StartScreenManager : MonoBehaviour
             if (playButton.transform.localScale == Vector3.zero)
                 playButton.transform.localScale = Vector3.one;
 
-            // Posicionar el boton JUGAR en una zona clara y destacada de la portada
+            // Posicionar el boton JUGAR centrado en la pantalla (vertical y horizontal)
             RectTransform rtBtn = playButton.GetComponent<RectTransform>();
             if (rtBtn != null)
             {
-                rtBtn.anchorMin = new Vector2(0.36f, 0.12f);
-                rtBtn.anchorMax = new Vector2(0.64f, 0.28f);
+                rtBtn.anchorMin = new Vector2(0.35f, 0.42f);
+                rtBtn.anchorMax = new Vector2(0.65f, 0.58f);
                 rtBtn.anchoredPosition = Vector2.zero;
                 rtBtn.sizeDelta = Vector2.zero;
             }
@@ -213,11 +213,17 @@ public class StartScreenManager : MonoBehaviour
             if (btnImg != null)
             {
                 btnImg.raycastTarget = true;
-                Sprite bSprite = CargarSpriteRecurso("btn_jugar_decorado");
-                if (bSprite == null) bSprite = CargarSpriteRecurso("btn_start");
-                if (bSprite != null)
+                if (btnImg.sprite == null)
                 {
-                    btnImg.sprite = bSprite;
+                    Sprite bSprite = CargarSpriteRecurso("btn_jugar_decorado");
+                    if (bSprite == null) bSprite = CargarSpriteRecurso("btn_start");
+                    if (bSprite != null)
+                    {
+                        btnImg.sprite = bSprite;
+                    }
+                }
+                if (btnImg.sprite != null)
+                {
                     btnImg.color = Color.white;
                     btnImg.preserveAspect = true;
                     hasDecoratedSprite = true;
@@ -314,6 +320,11 @@ public class StartScreenManager : MonoBehaviour
     void EnsureBackgroundLoaded()
     {
         if (backgroundImage == null) return;
+        if (backgroundImage.sprite != null)
+        {
+            backgroundImage.color = Color.white;
+            return;
+        }
 
         // 1. Cargar desde Resources (Funciona en WebGL, Windows y Movil)
         Sprite spDecorada = CargarSpriteRecurso("pantalla_inicio_decorada");

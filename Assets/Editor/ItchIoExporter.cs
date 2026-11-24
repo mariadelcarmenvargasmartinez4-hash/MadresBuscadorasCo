@@ -59,11 +59,40 @@ public static class ItchIoExporter
         }
     }
 
-    private static bool ExecuteWebGLBuild(bool interactive)
+    /// <summary>
+    /// Punto de entrada para compilación silenciosa hacia la carpeta mmm sin tocar el ZIP anterior (-executeMethod ItchIoExporter.BuildWebGLToMmmBatchMode).
+    /// </summary>
+    public static void BuildWebGLToMmmBatchMode()
+    {
+        try
+        {
+            string rootDir = Path.GetFullPath(Path.Combine(Application.dataPath, "../.."));
+            string buildDir = Path.Combine(rootDir, "WebGL_Build_mmm");
+            string mmmDir = Path.Combine(rootDir, "mmm");
+            Directory.CreateDirectory(mmmDir);
+            string zipPath = Path.Combine(mmmDir, "Hasta_Encontrarles_WebGL_Itchio_Netlify.zip");
+
+            bool ok = ExecuteWebGLBuild(interactive: false, customBuildDir: buildDir, customZipPath: zipPath);
+            if (Application.isBatchMode)
+            {
+                EditorApplication.Exit(ok ? 0 : 1);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError("[ItchIoExporter] Error crítico en BuildWebGLToMmmBatchMode: " + ex);
+            if (Application.isBatchMode)
+            {
+                EditorApplication.Exit(1);
+            }
+        }
+    }
+
+    private static bool ExecuteWebGLBuild(bool interactive, string customBuildDir = null, string customZipPath = null)
     {
         string rootDir = Path.GetFullPath(Path.Combine(Application.dataPath, "../.."));
-        string buildDir = Path.Combine(rootDir, "WebGL_Build");
-        string zipPath = Path.Combine(rootDir, "Hasta_Encontrarles_WebGL_Itchio_Netlify.zip");
+        string buildDir = string.IsNullOrEmpty(customBuildDir) ? Path.Combine(rootDir, "WebGL_Build") : customBuildDir;
+        string zipPath = string.IsNullOrEmpty(customZipPath) ? Path.Combine(rootDir, "Hasta_Encontrarles_WebGL_Itchio_Netlify.zip") : customZipPath;
 
         PlayerSettings.productName = "Hasta Encontrarles - El Camino de la Esperanza";
         PlayerSettings.companyName = "UTNG - Maria y Valeria";
@@ -103,6 +132,8 @@ public static class ItchIoExporter
 
         if (report.summary.result == BuildResult.Succeeded)
         {
+            string zipParent = Path.GetDirectoryName(zipPath);
+            if (!string.IsNullOrEmpty(zipParent)) Directory.CreateDirectory(zipParent);
             if (File.Exists(zipPath)) File.Delete(zipPath);
             ZipFile.CreateFromDirectory(buildDir, zipPath, System.IO.Compression.CompressionLevel.Optimal, false);
             Debug.Log("[ItchIoExporter] ZIP creado exitosamente en: " + zipPath);

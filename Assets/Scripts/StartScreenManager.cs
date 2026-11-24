@@ -67,7 +67,7 @@ public class StartScreenManager : MonoBehaviour
     [Header("Respiracion Cinematica")]
     public bool enableBackgroundBreathe = true;
     public float breatheSpeed = 0.6f;
-    public float breatheScaleAmount = 0.02f;
+    public float breatheScaleAmount = 0.015f;
 
     [Header("Particulas de Polvo / Brasas Flotantes")]
     public bool enableEmbers = true;
@@ -81,6 +81,10 @@ public class StartScreenManager : MonoBehaviour
     private Vector3 buttonBaseScale = Vector3.one;
     private Vector3 bgBaseScale = Vector3.one;
     private bool isHovered = false;
+    private bool fondoTieneBotonIntegrado = false;
+    private Canvas mainCanvas;
+    private RectTransform playButtonRect;
+    private Image playButtonImage;
 
     private static Sprite softCircleSprite;
 
@@ -111,11 +115,19 @@ public class StartScreenManager : MonoBehaviour
             parentCanvas = cGO.AddComponent<Canvas>();
             parentCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
             parentCanvas.sortingOrder = 100;
-            CanvasScaler cs = cGO.AddComponent<CanvasScaler>();
+        }
+        mainCanvas = parentCanvas;
+
+        if (parentCanvas.GetComponent<CanvasScaler>() == null)
+        {
+            CanvasScaler cs = parentCanvas.gameObject.AddComponent<CanvasScaler>();
             cs.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             cs.referenceResolution = new Vector2(1920f, 1080f);
             cs.matchWidthOrHeight = 0.5f;
-            cGO.AddComponent<GraphicRaycaster>();
+        }
+        if (parentCanvas.GetComponent<GraphicRaycaster>() == null)
+        {
+            parentCanvas.gameObject.AddComponent<GraphicRaycaster>();
         }
 
         if (canvasGroup == null)
@@ -153,6 +165,11 @@ public class StartScreenManager : MonoBehaviour
 
         // 2. Cargar portada decorada (Compatible con WebGL mediante Resources.Load)
         EnsureBackgroundLoaded();
+        if (backgroundImage != null)
+        {
+            backgroundImage.raycastTarget = false;
+        }
+        fondoTieneBotonIntegrado = (backgroundImage != null && backgroundImage.sprite != null);
 
         // 3. Reproducir musica de menu
         if (AudioManager.Instance != null)
@@ -160,7 +177,9 @@ public class StartScreenManager : MonoBehaviour
             AudioManager.Instance.PlayDesaparecidosBGM();
         }
 
-        // 4. Configurar Boton JUGAR visible e interactivo
+        // 4. Configurar Boton JUGAR / zona interactiva sobre el JUGAR de la portada
+        EnsureSoftCircleSprite();
+
         if (playButton == null)
             playButton = parentCanvas.GetComponentInChildren<Button>(true);
         if (playButton == null)
@@ -172,12 +191,12 @@ public class StartScreenManager : MonoBehaviour
             btnGO.transform.SetParent(parentCanvas.transform, false);
             btnGO.transform.SetAsLastSibling();
             RectTransform btnRT = btnGO.AddComponent<RectTransform>();
-            btnRT.anchorMin = new Vector2(0.35f, 0.14f);
-            btnRT.anchorMax = new Vector2(0.65f, 0.30f);
+            btnRT.anchorMin = new Vector2(0.37f, 0.41f);
+            btnRT.anchorMax = new Vector2(0.63f, 0.59f);
             btnRT.offsetMin = Vector2.zero;
             btnRT.offsetMax = Vector2.zero;
             Image bImg = btnGO.AddComponent<Image>();
-            bImg.color = Color.white;
+            bImg.color = new Color(1f, 0.85f, 0.45f, 0.005f);
             playButton = btnGO.AddComponent<Button>();
         }
 
@@ -193,26 +212,46 @@ public class StartScreenManager : MonoBehaviour
             if (playButton.transform.localScale == Vector3.zero)
                 playButton.transform.localScale = Vector3.one;
 
-            // Posicionar el boton JUGAR centrado en la pantalla (vertical y horizontal)
+            // Posicionar la zona interactiva exactamente sobre la pildora "JUGAR" de la portada
             RectTransform rtBtn = playButton.GetComponent<RectTransform>();
             if (rtBtn != null)
             {
-                rtBtn.anchorMin = new Vector2(0.35f, 0.42f);
-                rtBtn.anchorMax = new Vector2(0.65f, 0.58f);
+                rtBtn.anchorMin = new Vector2(0.37f, 0.41f);
+                rtBtn.anchorMax = new Vector2(0.63f, 0.59f);
                 rtBtn.anchoredPosition = Vector2.zero;
                 rtBtn.sizeDelta = Vector2.zero;
             }
+            playButtonRect = rtBtn;
 
             buttonBaseScale = playButton.transform.localScale;
             playButton.interactable = true;
+            playButton.transition = Selectable.Transition.None;
             playButton.onClick.RemoveAllListeners();
             playButton.onClick.AddListener(StartGame);
 
-            bool hasDecoratedSprite = false;
-            Image btnImg = playButton.GetComponent<Image>();
-            if (btnImg != null)
+            CanvasRenderer cr = playButton.GetComponent<CanvasRenderer>();
+            if (cr != null) cr.cullTransparentMesh = false;
+
+            Image btnImg = playButton.GetComponent<Image>() ?? playButton.gameObject.AddComponent<Image>();
+            playButton.targetGraphic = btnImg;
+            playButtonImage = btnImg;
+            btnImg.raycastTarget = true;
+
+            if (fondoTieneBotonIntegrado)
             {
-                btnImg.raycastTarget = true;
+                // La portada ya incluye "JUGAR" dibujado: mantener el hotspot sin texto ni sprite duplicado
+                btnImg.sprite = softCircleSprite;
+                btnImg.preserveAspect = false;
+                btnImg.color = new Color(1f, 0.85f, 0.45f, 0.005f);
+
+                foreach (var tChild in playButton.GetComponentsInChildren<Text>(true))
+                {
+                    if (tChild != null) tChild.gameObject.SetActive(false);
+                }
+            }
+            else
+            {
+                bool hasDecoratedSprite = false;
                 if (btnImg.sprite == null)
                 {
                     Sprite bSprite = CargarSpriteRecurso("btn_jugar_decorado");
@@ -232,47 +271,36 @@ public class StartScreenManager : MonoBehaviour
                 {
                     btnImg.color = new Color(0.16f, 0.62f, 0.34f, 0.96f);
                 }
-            }
 
-            Text btnTxt = playButton.GetComponentInChildren<Text>(true);
-            if (hasDecoratedSprite)
-            {
-                if (btnTxt != null) btnTxt.gameObject.SetActive(false);
-            }
-            else
-            {
-                if (btnTxt == null)
+                Text btnTxt = playButton.GetComponentInChildren<Text>(true);
+                if (hasDecoratedSprite)
                 {
-                    GameObject txtGO = new GameObject("BtnText");
-                    txtGO.transform.SetParent(playButton.transform, false);
-                    btnTxt = txtGO.AddComponent<Text>();
-                    RectTransform rt = txtGO.GetComponent<RectTransform>();
-                    rt.anchorMin = Vector2.zero;
-                    rt.anchorMax = Vector2.one;
-                    rt.offsetMin = Vector2.zero;
-                    rt.offsetMax = Vector2.zero;
+                    if (btnTxt != null) btnTxt.gameObject.SetActive(false);
                 }
-                Font f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-                if (f == null) f = Font.CreateDynamicFontFromOSFont("Arial", 32);
-                btnTxt.font = f;
-                btnTxt.text = "▶ JUGAR";
-                btnTxt.fontSize = 40;
-                btnTxt.fontStyle = FontStyle.Bold;
-                btnTxt.alignment = TextAnchor.MiddleCenter;
-                btnTxt.color = Color.white;
-                btnTxt.gameObject.SetActive(true);
+                else
+                {
+                    if (btnTxt == null)
+                    {
+                        GameObject txtGO = new GameObject("BtnText");
+                        txtGO.transform.SetParent(playButton.transform, false);
+                        btnTxt = txtGO.AddComponent<Text>();
+                        RectTransform rt = txtGO.GetComponent<RectTransform>();
+                        rt.anchorMin = Vector2.zero;
+                        rt.anchorMax = Vector2.one;
+                        rt.offsetMin = Vector2.zero;
+                        rt.offsetMax = Vector2.zero;
+                    }
+                    Font f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                    if (f == null) f = Font.CreateDynamicFontFromOSFont("Arial", 32);
+                    btnTxt.font = f;
+                    btnTxt.text = "JUGAR";
+                    btnTxt.fontSize = 40;
+                    btnTxt.fontStyle = FontStyle.Bold;
+                    btnTxt.alignment = TextAnchor.MiddleCenter;
+                    btnTxt.color = Color.white;
+                    btnTxt.gameObject.SetActive(true);
+                }
             }
-
-            var trigger = playButton.gameObject.GetComponent<EventTrigger>();
-            if (trigger == null) trigger = playButton.gameObject.AddComponent<EventTrigger>();
-
-            var enter = new EventTrigger.Entry { eventID = EventTriggerType.PointerEnter };
-            enter.callback.AddListener((_) => { isHovered = true; });
-            trigger.triggers.Add(enter);
-
-            var exit = new EventTrigger.Entry { eventID = EventTriggerType.PointerExit };
-            exit.callback.AddListener((_) => { isHovered = false; });
-            trigger.triggers.Add(exit);
         }
 
         Time.timeScale = 1f;
@@ -280,6 +308,11 @@ public class StartScreenManager : MonoBehaviour
         if (enableEmbers)
         {
             CreateProceduralEmbers();
+        }
+
+        if (playButton != null)
+        {
+            playButton.transform.SetAsLastSibling();
         }
     }
 
@@ -293,12 +326,17 @@ public class StartScreenManager : MonoBehaviour
         }
 #if ENABLE_INPUT_SYSTEM
         StandaloneInputModule legacyMod = es.GetComponent<StandaloneInputModule>();
-        if (legacyMod != null) Destroy(legacyMod);
-        if (es.GetComponent<InputSystemUIInputModule>() == null)
-            es.gameObject.AddComponent<InputSystemUIInputModule>();
+        if (legacyMod != null) DestroyImmediate(legacyMod);
+        InputSystemUIInputModule uiMod = es.GetComponent<InputSystemUIInputModule>();
+        if (uiMod == null)
+            uiMod = es.gameObject.AddComponent<InputSystemUIInputModule>();
+        if (uiMod.actionsAsset == null)
+            uiMod.AssignDefaultActions();
+        es.UpdateModules();
 #else
         if (es.GetComponent<StandaloneInputModule>() == null)
             es.gameObject.AddComponent<StandaloneInputModule>();
+        es.UpdateModules();
 #endif
     }
 
@@ -368,7 +406,7 @@ public class StartScreenManager : MonoBehaviour
 
         GameObject embersRoot = new GameObject("EmbersContainer");
         embersRoot.transform.SetParent(parent, false);
-        embersRoot.transform.SetSiblingIndex(Mathf.Max(0, parent.childCount - 2));
+        embersRoot.transform.SetSiblingIndex(1);
 
         for (int i = 0; i < emberCount; i++)
         {
@@ -433,32 +471,69 @@ public class StartScreenManager : MonoBehaviour
         tiempoEnMenu += Time.unscaledDeltaTime;
         float t = Time.unscaledTime;
 
-        // 1. Animacion del Boton JUGAR (Pulso + Hover)
+        Camera canvasCam = (mainCanvas != null && mainCanvas.renderMode != RenderMode.ScreenSpaceOverlay)
+            ? mainCanvas.worldCamera
+            : null;
+
+        // Evaluar posicion actual del puntero para hover directo sobre Button_START
+        Vector2 pointerPos = Vector2.zero;
+        bool hasPointer = false;
+#if ENABLE_INPUT_SYSTEM
+        var mouseCur = Mouse.current;
+        if (mouseCur != null)
+        {
+            pointerPos = mouseCur.position.ReadValue();
+            hasPointer = true;
+        }
+#endif
+        if (!hasPointer)
+        {
+            try
+            {
+                pointerPos = (Vector2)Input.mousePosition;
+                hasPointer = true;
+            }
+            catch { }
+        }
+
+        isHovered = hasPointer && playButtonRect != null &&
+                    RectTransformUtility.RectangleContainsScreenPoint(playButtonRect, pointerPos, canvasCam);
+
+        // 1. Animacion del Boton JUGAR / Brillo sutil sobre el boton integrado en portada
         if (playButton != null)
         {
-            float targetHoverScale = isHovered ? 1.08f : 1.0f;
-            float pulse = Mathf.Sin(t * pulseSpeed) * pulseScaleAmount;
-            float s = targetHoverScale + pulse;
-            playButton.transform.localScale = Vector3.Lerp(playButton.transform.localScale, buttonBaseScale * s, Time.unscaledDeltaTime * 10f);
-
-            if (buttonGlowImage != null)
+            if (fondoTieneBotonIntegrado && playButtonImage != null)
             {
-                float glowAlpha = 0.4f + Mathf.Sin(t * (pulseSpeed * 1.2f)) * 0.35f;
-                if (isHovered) glowAlpha = 0.9f;
-                Color gc = buttonGlowImage.color;
-                gc.a = glowAlpha;
-                buttonGlowImage.color = gc;
+                playButton.transform.localScale = buttonBaseScale;
+                float targetAlpha = isHovered ? 0.24f : 0.005f;
+                Color c = playButtonImage.color;
+                c.a = Mathf.Lerp(c.a, targetAlpha, Time.unscaledDeltaTime * 12f);
+                playButtonImage.color = c;
+            }
+            else
+            {
+                float targetHoverScale = isHovered ? 1.08f : 1.0f;
+                float pulse = Mathf.Sin(t * pulseSpeed) * pulseScaleAmount;
+                float s = targetHoverScale + pulse;
+                playButton.transform.localScale = Vector3.Lerp(playButton.transform.localScale, buttonBaseScale * s, Time.unscaledDeltaTime * 10f);
+
+                if (buttonGlowImage != null)
+                {
+                    float glowAlpha = 0.4f + Mathf.Sin(t * (pulseSpeed * 1.2f)) * 0.35f;
+                    if (isHovered) glowAlpha = 0.9f;
+                    Color gc = buttonGlowImage.color;
+                    gc.a = glowAlpha;
+                    buttonGlowImage.color = gc;
+                }
             }
         }
 
-        // 2. Respiracion Cinematica del Fondo
+        // 2. Respiracion Cinematica del Fondo (sin rotacion Z para mantener alineada la zona JUGAR)
         if (enableBackgroundBreathe && backgroundTransform != null)
         {
             float bgS = 1f + Mathf.Sin(t * breatheSpeed) * breatheScaleAmount;
             backgroundTransform.localScale = bgBaseScale * bgS;
-
-            float rot = Mathf.Sin(t * (breatheSpeed * 0.5f)) * 0.25f;
-            backgroundTransform.localRotation = Quaternion.Euler(0, 0, rot);
+            backgroundTransform.localRotation = Quaternion.identity;
         }
 
         // 3. Animacion de Brasas / Polvo del Desierto
@@ -491,9 +566,47 @@ public class StartScreenManager : MonoBehaviour
             }
         }
 
-        // 4. Esperar al menos 1.2 segundos para que el clic de "Run Game" del navegador NO salte el menu principal.
-        // Despues de 1.2s, el jugador inicia dando clic en el boton JUGAR o presionando Enter / Espacio.
-        if (tiempoEnMenu < 1.2f) return;
+        // 4. Proteccion breve contra el clic de foco ("Run Game" en itch.io); despues permite clic en JUGAR o Enter/Espacio
+        if (tiempoEnMenu < 0.35f) return;
+
+        bool clicEnBoton = false;
+        Vector2 pressPos = pointerPos;
+
+#if ENABLE_INPUT_SYSTEM
+        if (mouseCur != null && mouseCur.leftButton.wasPressedThisFrame)
+        {
+            pressPos = mouseCur.position.ReadValue();
+            if (playButtonRect != null && RectTransformUtility.RectangleContainsScreenPoint(playButtonRect, pressPos, canvasCam))
+                clicEnBoton = true;
+        }
+        var touchCur = Touchscreen.current;
+        if (!clicEnBoton && touchCur != null && touchCur.primaryTouch.press.wasPressedThisFrame)
+        {
+            pressPos = touchCur.primaryTouch.position.ReadValue();
+            if (playButtonRect != null && RectTransformUtility.RectangleContainsScreenPoint(playButtonRect, pressPos, canvasCam))
+                clicEnBoton = true;
+        }
+#endif
+
+        if (!clicEnBoton)
+        {
+            try
+            {
+                if (Input.GetMouseButtonDown(0))
+                {
+                    pressPos = (Vector2)Input.mousePosition;
+                    if (playButtonRect != null && RectTransformUtility.RectangleContainsScreenPoint(playButtonRect, pressPos, canvasCam))
+                        clicEnBoton = true;
+                }
+                else if (Input.touchCount > 0 && Input.GetTouch(0).phase == UnityEngine.TouchPhase.Began)
+                {
+                    pressPos = Input.GetTouch(0).position;
+                    if (playButtonRect != null && RectTransformUtility.RectangleContainsScreenPoint(playButtonRect, pressPos, canvasCam))
+                        clicEnBoton = true;
+                }
+            }
+            catch { }
+        }
 
         bool presionoEnterOEspacio = false;
 #if ENABLE_INPUT_SYSTEM
@@ -508,7 +621,7 @@ public class StartScreenManager : MonoBehaviour
         }
         catch { }
 
-        if (presionoEnterOEspacio)
+        if (clicEnBoton || presionoEnterOEspacio)
         {
             StartGame();
         }
@@ -516,7 +629,7 @@ public class StartScreenManager : MonoBehaviour
 
     public void StartGame()
     {
-        if (gameStarted || tiempoEnMenu < 0.35f) return;
+        if (gameStarted || tiempoEnMenu < 0.25f) return;
         gameStarted = true;
         Debug.Log("[StartScreenManager] ¡Boton JUGAR presionado! Iniciando Nivel 1...");
 

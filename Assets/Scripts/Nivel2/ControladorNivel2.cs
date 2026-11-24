@@ -1,0 +1,741 @@
+using UnityEngine;
+using UnityEngine.SceneManagement;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
+
+/// <summary>
+/// Controlador principal del Nivel 2: "Las Puertas Cerradas de la Burocracia".
+/// Gestiona la barra de Ánimo/Vida, el expediente con las 10 hojas coleccionables,
+/// el sistema de 10 acertijos deductivos, los obstáculos móviles y los 4 estados del juego.
+/// </summary>
+public class ControladorNivel2 : MonoBehaviour
+{
+    public static ControladorNivel2 Instancia { get; private set; }
+
+    public enum EstadoJuego
+    {
+        Jugando,
+        Pausado,
+        Victoria,
+        Derrota
+    }
+
+    [Header("Estado del Nivel")]
+    public EstadoJuego estadoActual = EstadoJuego.Jugando;
+
+    [Header("Línea de vida")]
+    [Tooltip("Línea de vida máxima de la Madre Buscadora")]
+    public float saludMaxima = 100f;
+    public float saludActual = 100f;
+
+    [Header("Escena Siguiente")]
+    public string siguienteEscena = "Nivel_3";
+
+    [Header("Hojas y Expediente (10 Hojas)")]
+    [Tooltip("Cantidad total de fragmentos de hoja por encontrar")]
+    public int totalHojas = 10;
+    public int hojasRecolectadas = 0;
+
+    [Header("Tiempo")]
+    public float tiempoTranscurrido = 0f;
+
+    // 10 ACERTIJOS DEDUCTIVOS QUE GUIAN LA BÚSQUEDA DEL EXPEDIENTE COMPLETO
+    private readonly string[] titulosAcertijos = new string[]
+    {
+        "🔍 ACERTIJO 1 (Superficie / Mercado)",
+        "🔍 ACERTIJO 2 (Superficie / Parada)",
+        "🔍 ACERTIJO 3 (Nivel Medio / Pozo)",
+        "🔍 ACERTIJO 4 (Nivel Medio / Registro)",
+        "🔍 ACERTIJO 5 (Puente de Descenso)",
+        "🔍 ACERTIJO 6 (Sótano / La Estatua)",
+        "🔍 ACERTIJO 7 (Túnel de Archiveros)",
+        "🔍 ACERTIJO 8 (Abismo / Andamios)",
+        "🔍 ACERTIJO 9 (Cornisa de Cadenas)",
+        "🔍 ACERTIJO 10 FINAL (La Bóveda)"
+    };
+
+    private readonly string[] textosAcertijos = new string[]
+    {
+        "\"El rastro comienza donde comerciaban los viajeros: busca en lo alto, entre las cajas de madera sobre el tejado del mercado.\"",
+        "\"El autobús partió de la parada solitaria al borde del pueblo... busca donde termina la calle alta, tras el poste de madera.\"",
+        "\"Donde las ropas cuelgan al viento y el agua del viejo pozo guarda silencio... busca en la cornisa resguardada tras la piedra.\"",
+        "\"En la mesa de los sellos oficiales y las salas de espera frías... busca en el rincón entre los barriles de la oficina del registro.\"",
+        "\"El camino desciende a la oscuridad... busca bajo los maderos del andamio que une la plaza con el túnel subterráneo.\"",
+        "\"La burocracia sepultó las quejas bajo tierra... busca la efigie de piedra que reza solitaria en el pasadizo subterráneo.\"",
+        "\"Las respuestas oficiales siempre fueron evasivas... busca al final del corredor subterráneo, tras los viejos archiveros.\"",
+        "\"El frío aumenta conforme se desciende a la fosa... baja hacia el nuevo tramo subterráneo y busca la hoja junto a los andamios de madera.\"",
+        "\"En las profundidades, avanza hacia la izquierda rumbo a la bóveda... la hoja reposa resguardada entre las viejas cadenas de hierro.\"",
+        "\"En el fondo de la gran bóveda final, cruzando hacia el extremo izquierdo... el expediente sellado aguarda para completar la verdad e iniciar la búsqueda en campo (Nivel 3).\""
+    };
+
+    // Notificación en pantalla al recoger una hoja
+    private string mensajePistaActual = "";
+    private float temporizadorMensaje = 0f;
+    private const float DURACION_MENSAJE = 6.5f;
+
+    // Texturas para la interfaz gráfica
+    private Texture2D texFondoHUD;
+    private Texture2D texBarraVida;
+    private Texture2D texBarraFondo;
+    private Texture2D texPanel;
+    private Texture2D texOverlayOscuro;
+
+    public static void AsegurarInstancia()
+    {
+        if (Instancia == null)
+        {
+            var existente = FindAnyObjectByType<ControladorNivel2>();
+            if (existente != null)
+            {
+                Instancia = existente;
+            }
+            else
+            {
+                GameObject go = new GameObject("ControladorNivel");
+                Instancia = go.AddComponent<ControladorNivel2>();
+            }
+        }
+    }
+
+    void Awake()
+    {
+        if (Instancia == null)
+        {
+            Instancia = this;
+        }
+        else if (Instancia != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        saludActual = saludMaxima;
+        Time.timeScale = 1f;
+        CrearTexturasUI();
+    }
+
+    void Update()
+    {
+        // 1. Control de Pausa (Tecla Escape o tecla P)
+        VerificarEntradaPausa();
+
+        // 2. Si estamos en juego, contar tiempo
+        if (estadoActual == EstadoJuego.Jugando)
+        {
+            tiempoTranscurrido += Time.deltaTime;
+
+            if (temporizadorMensaje > 0f)
+            {
+                temporizadorMensaje -= Time.deltaTime;
+                if (temporizadorMensaje <= 0f)
+                {
+                    mensajePistaActual = "";
+                }
+            }
+
+#if UNITY_EDITOR
+            // Tecla rápida de prueba en el Editor (F9 o H) para probar el menú ¡HAS GANADO!
+            if (Input.GetKeyDown(KeyCode.F9))
+            {
+                hojasRecolectadas = totalHojas;
+                CompletarNivel();
+            }
+#endif
+        }
+    }
+
+    private void VerificarEntradaPausa()
+    {
+        bool presionoPausa = false;
+
+#if ENABLE_INPUT_SYSTEM
+        var teclado = Keyboard.current;
+        if (teclado != null)
+        {
+            if (teclado.escapeKey.wasPressedThisFrame || teclado.pKey.wasPressedThisFrame || teclado.mKey.wasPressedThisFrame)
+            {
+                presionoPausa = true;
+            }
+        }
+#endif
+        if (!presionoPausa)
+        {
+            try
+            {
+                if (Input.GetKeyDown(KeyCode.Escape) || Input.GetKeyDown(KeyCode.P) || Input.GetKeyDown(KeyCode.M))
+                {
+                    presionoPausa = true;
+                }
+            }
+            catch { }
+        }
+
+        if (presionoPausa)
+        {
+            if (estadoActual == EstadoJuego.Jugando)
+            {
+                PausarJuego();
+            }
+            else if (estadoActual == EstadoJuego.Pausado)
+            {
+                ReanudarJuego();
+            }
+        }
+    }
+
+    public void ModificarSalud(float cantidad)
+    {
+        if (estadoActual != EstadoJuego.Jugando) return;
+
+        saludActual = Mathf.Clamp(saludActual + cantidad, 0f, saludMaxima);
+
+        if (cantidad < 0f)
+        {
+            ControladorAudio.Instancia?.ReproducirDanio();
+        }
+
+        if (saludActual <= 0f)
+        {
+            ActivarGameOver();
+        }
+    }
+
+    public bool ConsumirBotellaAgua(float cantidadRecuperar = 25f)
+    {
+        if (estadoActual != EstadoJuego.Jugando) return false;
+
+        saludActual = Mathf.Clamp(saludActual + cantidadRecuperar, 0f, saludMaxima);
+
+        ControladorAudio.Instancia?.ReproducirBeberAgua();
+
+        mensajePistaActual = $"💧 ¡BOTELLA DE AGUA FRESCA RECOGIDA!\n+{(int)cantidadRecuperar}% de Línea de vida recuperada para continuar la búsqueda.";
+        temporizadorMensaje = 4.5f;
+
+        return true;
+    }
+
+    public void RecolectarHoja(int numero, string titulo, string detalle)
+    {
+        if (estadoActual != EstadoJuego.Jugando) return;
+
+        hojasRecolectadas = Mathf.Clamp(hojasRecolectadas + 1, 0, totalHojas);
+        mensajePistaActual = $"¡HOJA {hojasRecolectadas}/{totalHojas} ENCONTRADA!\n{titulo}\n\"{detalle}\"";
+        temporizadorMensaje = DURACION_MENSAJE;
+
+        // Efecto sonoro de recolección de evidencia
+        ControladorAudio.Instancia?.ReproducirRecogerHoja();
+
+        // Si ya recogió las 10 hojas
+        if (hojasRecolectadas >= totalHojas)
+        {
+            Invoke(nameof(CompletarNivel), 0.8f);
+        }
+    }
+
+    public void PausarJuego()
+    {
+        if (estadoActual == EstadoJuego.Jugando)
+        {
+            estadoActual = EstadoJuego.Pausado;
+            Time.timeScale = 0f;
+            ControladorAudio.Instancia?.PausarMusica();
+        }
+    }
+
+    public void ReanudarJuego()
+    {
+        if (estadoActual == EstadoJuego.Pausado)
+        {
+            estadoActual = EstadoJuego.Jugando;
+            Time.timeScale = 1f;
+            ControladorAudio.Instancia?.ReanudarMusica();
+        }
+    }
+
+    public void ActivarGameOver()
+    {
+        estadoActual = EstadoJuego.Derrota;
+        Time.timeScale = 0f;
+        ControladorAudio.Instancia?.DetenerMusica();
+    }
+
+    public void CompletarNivel()
+    {
+        estadoActual = EstadoJuego.Victoria;
+        Time.timeScale = 0f;
+        PlayerPrefs.SetInt("NivelDesbloqueado", Mathf.Max(PlayerPrefs.GetInt("NivelDesbloqueado", 1), 3));
+        PlayerPrefs.Save();
+        ControladorAudio.Instancia?.ReproducirVictoria();
+    }
+
+    public void IrAlSiguienteNivel()
+    {
+        Time.timeScale = 1f;
+        string destino = string.IsNullOrEmpty(siguienteEscena) ? "Nivel_3" : siguienteEscena;
+#if UNITY_EDITOR
+        if (System.IO.File.Exists("Assets/Nivel_3.unity"))
+        {
+            UnityEditor.SceneManagement.EditorSceneManager.LoadSceneInPlayMode(
+                "Assets/Nivel_3.unity",
+                new SceneLoadParametersWrapper().GetSingle()
+            );
+            return;
+        }
+#endif
+        try
+        {
+            SceneManager.LoadScene(destino);
+        }
+        catch
+        {
+            SceneManager.LoadScene(3);
+        }
+    }
+
+    private struct SceneLoadParametersWrapper
+    {
+        public LoadSceneParameters GetSingle() => new LoadSceneParameters(LoadSceneMode.Single);
+    }
+
+    public void ReiniciarNivel()
+    {
+        Time.timeScale = 1f;
+#if UNITY_EDITOR
+        string activePath = SceneManager.GetActiveScene().path;
+        if (!string.IsNullOrEmpty(activePath) && System.IO.File.Exists(activePath))
+        {
+            UnityEditor.SceneManagement.EditorSceneManager.LoadSceneInPlayMode(
+                activePath,
+                new LoadSceneParameters(LoadSceneMode.Single)
+            );
+            return;
+        }
+#endif
+        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+    }
+
+    public void SalirAlMenu()
+    {
+        Time.timeScale = 1f;
+#if UNITY_EDITOR
+        if (System.IO.File.Exists("Assets/Scenes/MenuInicio.unity"))
+        {
+            UnityEditor.SceneManagement.EditorSceneManager.LoadSceneInPlayMode(
+                "Assets/Scenes/MenuInicio.unity",
+                new LoadSceneParameters(LoadSceneMode.Single)
+            );
+            return;
+        }
+#endif
+        try
+        {
+            SceneManager.LoadScene("MenuInicio");
+        }
+        catch
+        {
+            if (SceneManager.sceneCountInBuildSettings > 1)
+                SceneManager.LoadScene(0);
+            else
+                ReiniciarNivel();
+        }
+    }
+
+    // ==========================================
+    // RENDERIZADO DEL HUD CON 10 ACERTIJOS
+    // ==========================================
+    private Texture2D texBordeDorado;
+
+    private void CrearTexturasUI()
+    {
+        if (texFondoHUD == null) texFondoHUD = CrearTexturaColor(new Color(0.08f, 0.09f, 0.14f, 0.90f));
+        if (texBarraFondo == null) texBarraFondo = CrearTexturaColor(new Color(0.20f, 0.20f, 0.25f, 0.95f));
+        if (texBarraVida == null) texBarraVida = CrearTexturaColor(new Color(0.22f, 0.85f, 0.42f, 1f));
+        if (texPanel == null) texPanel = CrearTexturaColor(new Color(0.10f, 0.12f, 0.18f, 0.98f));
+        if (texOverlayOscuro == null) texOverlayOscuro = CrearTexturaColor(new Color(0.03f, 0.04f, 0.07f, 0.85f));
+        if (texBordeDorado == null) texBordeDorado = CrearTexturaColor(new Color(1f, 0.85f, 0.25f, 1f));
+    }
+
+    private Texture2D CrearTexturaColor(Color color)
+    {
+        Texture2D tex = new Texture2D(1, 1);
+        tex.SetPixel(0, 0, color);
+        tex.Apply();
+        return tex;
+    }
+
+    void OnGUI()
+    {
+        CrearTexturasUI();
+
+        // 1. HUD Superior (Salud, Conteo de 10 Hojas, Acertijo Deductivo y Tiempo)
+        DibujarHUD();
+
+        // 2. Banner de confirmación cuando se encuentra una hoja
+        if (!string.IsNullOrEmpty(mensajePistaActual) && estadoActual == EstadoJuego.Jugando)
+        {
+            DibujarBannerPista();
+        }
+
+        // 3. Ventanas de estados (Pausa, Victoria, Game Over)
+        switch (estadoActual)
+        {
+            case EstadoJuego.Pausado:
+                DibujarMenuPausa();
+                break;
+            case EstadoJuego.Victoria:
+                DibujarPantallaVictoria();
+                break;
+            case EstadoJuego.Derrota:
+                DibujarPantallaDerrota();
+                break;
+        }
+    }
+
+    private void DibujarHUD()
+    {
+        GUIStyle estiloTexto = new GUIStyle(GUI.skin.label);
+        estiloTexto.fontSize = 13;
+        estiloTexto.fontStyle = FontStyle.Bold;
+        estiloTexto.normal.textColor = Color.white;
+
+        // PANEL 1: Superior Izquierdo (Línea de vida)
+        GUI.DrawTexture(new Rect(15, 15, 250, 75), texFondoHUD);
+        float porcentaje = Mathf.Clamp01(saludActual / saludMaxima);
+        GUI.Label(new Rect(25, 20, 230, 20), $"❤️ LÍNEA DE VIDA: {Mathf.RoundToInt(saludActual)}%", estiloTexto);
+
+        // Fondo de la barra
+        GUI.DrawTexture(new Rect(25, 45, 230, 22), texBarraFondo);
+
+        // Barra con color dinámico
+        Color colorVida = porcentaje > 0.5f ? Color.Lerp(Color.yellow, new Color(0.22f, 0.85f, 0.42f), (porcentaje - 0.5f) * 2f)
+                                           : Color.Lerp(new Color(0.92f, 0.25f, 0.25f), Color.yellow, porcentaje * 2f);
+        GUI.color = colorVida;
+        GUI.DrawTexture(new Rect(27, 47, 226 * porcentaje, 18), texBarraVida);
+        GUI.color = Color.white;
+
+        // PANEL 2: Superior Central (Conteo de 10 Hojas y ACERTIJO DE PISTA ACTIVO)
+        float anchoCentral = 560f;
+        float xCentral = (Screen.width - anchoCentral) / 2f;
+        GUI.DrawTexture(new Rect(xCentral, 15, anchoCentral, 75), texFondoHUD);
+
+        // Conteo de hojas
+        GUIStyle estiloHojas = new GUIStyle(estiloTexto);
+        estiloHojas.fontSize = 14;
+        estiloHojas.alignment = TextAnchor.MiddleCenter;
+        estiloHojas.normal.textColor = new Color(1f, 0.88f, 0.35f);
+        GUI.Label(new Rect(xCentral, 18, anchoCentral, 20), $"📄 EXPEDIENTE: {hojasRecolectadas} de {totalHojas} Hojas Reunidas", estiloHojas);
+
+        // Acertijo para deducir la siguiente hoja
+        int idxAcertijo = Mathf.Clamp(hojasRecolectadas, 0, totalHojas - 1);
+        string titulo = (hojasRecolectadas >= totalHojas) ? "⭐ EXPEDIENTE COMPLETO" : titulosAcertijos[idxAcertijo];
+        string pista = (hojasRecolectadas >= totalHojas)
+            ? "¡Has reunido las 10 partes del expediente! Las pruebas están listas para la brigada de búsqueda (Nivel 3)."
+            : textosAcertijos[idxAcertijo];
+
+        GUIStyle estiloAcertijo = new GUIStyle(GUI.skin.label);
+        estiloAcertijo.fontSize = 11;
+        estiloAcertijo.fontStyle = FontStyle.Italic;
+        estiloAcertijo.alignment = TextAnchor.MiddleCenter;
+        estiloAcertijo.normal.textColor = new Color(0.92f, 0.95f, 1f);
+        estiloAcertijo.wordWrap = true;
+
+        GUI.Label(new Rect(xCentral + 15, 38, anchoCentral - 30, 48), $"{titulo}: {pista}", estiloAcertijo);
+
+        // PANEL 3: Superior Derecho (Tiempo, Botón Quitar Sonido y Botón Menú)
+        float anchoDer = 230f;
+        float xDer = Screen.width - anchoDer - 15f;
+        GUI.DrawTexture(new Rect(xDer, 15, anchoDer, 75), texFondoHUD);
+        int minutos = Mathf.FloorToInt(tiempoTranscurrido / 60F);
+        int segundos = Mathf.FloorToInt(tiempoTranscurrido % 60F);
+        GUI.Label(new Rect(xDer + 15, 18, anchoDer - 30, 20), $"⏱️ Tiempo: {minutos:00}:{segundos:00}", estiloTexto);
+
+        // Botón rápido de sonido (Quitar Sonido / Activar Sonido)
+        bool silenciadoHUD = ControladorAudio.Instancia != null && ControladorAudio.Instancia.sonidoSilenciado;
+        string textoBtnSonidoHUD = silenciadoHUD ? "🔇 Mudo" : "🔊 Audio";
+        Color colorAnt = GUI.backgroundColor;
+        GUI.backgroundColor = silenciadoHUD ? new Color(0.65f, 0.65f, 0.7f) : new Color(0.25f, 0.75f, 0.4f);
+        if (GUI.Button(new Rect(xDer + 12, 42, 90, 28), textoBtnSonidoHUD))
+        {
+            ControladorAudio.Instancia?.AlternarSonido();
+        }
+
+        // Botón para abrir el Menú de Opciones
+        GUI.backgroundColor = new Color(0.25f, 0.55f, 0.9f);
+        if (GUI.Button(new Rect(xDer + 108, 42, 110, 28), "⚙️ Menú (P)"))
+        {
+            if (estadoActual == EstadoJuego.Jugando)
+            {
+                PausarJuego();
+            }
+            else if (estadoActual == EstadoJuego.Pausado)
+            {
+                ReanudarJuego();
+            }
+        }
+        GUI.backgroundColor = colorAnt;
+    }
+
+    private void DibujarBannerPista()
+    {
+        float ancho = 640f;
+        float alto = 85f;
+        float x = (Screen.width - ancho) / 2f;
+        float y = Screen.height - alto - 25f;
+
+        GUI.DrawTexture(new Rect(x, y, ancho, alto), texPanel);
+
+        GUIStyle estiloTitulo = new GUIStyle(GUI.skin.label);
+        estiloTitulo.fontSize = 13;
+        estiloTitulo.fontStyle = FontStyle.Bold;
+        estiloTitulo.alignment = TextAnchor.MiddleCenter;
+        estiloTitulo.normal.textColor = new Color(1f, 0.92f, 0.4f);
+        estiloTitulo.wordWrap = true;
+
+        GUI.Label(new Rect(x + 15, y + 10, ancho - 30, alto - 20), mensajePistaActual, estiloTitulo);
+    }
+
+    private void DibujarMenuPausa()
+    {
+        // 1. Fondo oscurecido de pantalla completa
+        if (texOverlayOscuro == null) texOverlayOscuro = CrearTexturaColor(new Color(0.03f, 0.04f, 0.07f, 0.85f));
+        GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), texOverlayOscuro);
+
+        // 2. Ventana del Menú Estandarizado
+        float ancho = 480f;
+        float alto = 420f;
+        float x = (Screen.width - ancho) / 2f;
+        float y = (Screen.height - alto) / 2f;
+
+        GUI.DrawTexture(new Rect(x, y, ancho, alto), texPanel);
+        if (texBordeDorado != null)
+        {
+            GUI.DrawTexture(new Rect(x, y, ancho, 4), texBordeDorado);
+            GUI.DrawTexture(new Rect(x, y + alto - 4, ancho, 4), texBordeDorado);
+        }
+
+        // Título del Menú
+        GUIStyle estiloTitulo = new GUIStyle(GUI.skin.label);
+        estiloTitulo.fontSize = 22;
+        estiloTitulo.fontStyle = FontStyle.Bold;
+        estiloTitulo.alignment = TextAnchor.MiddleCenter;
+        estiloTitulo.normal.textColor = new Color(1f, 0.88f, 0.35f);
+        GUI.Label(new Rect(x, y + 18, ancho, 32), "⏸ MENÚ DE PAUSA", estiloTitulo);
+
+        // Subtítulo
+        GUIStyle estiloSub = new GUIStyle(GUI.skin.label);
+        estiloSub.fontSize = 12;
+        estiloSub.alignment = TextAnchor.MiddleCenter;
+        estiloSub.normal.textColor = new Color(0.8f, 0.85f, 0.95f);
+        GUI.Label(new Rect(x, y + 50, ancho, 20), "Nivel 2: Las Puertas Cerradas de la Burocracia", estiloSub);
+
+        // Estado del jugador
+        GUIStyle estiloInfo = new GUIStyle(GUI.skin.label);
+        estiloInfo.fontSize = 12;
+        estiloInfo.alignment = TextAnchor.MiddleCenter;
+        estiloInfo.normal.textColor = new Color(0.9f, 0.9f, 0.9f);
+        int minutos = Mathf.FloorToInt(tiempoTranscurrido / 60F);
+        int segundos = Mathf.FloorToInt(tiempoTranscurrido % 60F);
+        GUI.Label(new Rect(x, y + 74, ancho, 20), $"❤️ Línea de vida: {Mathf.RoundToInt(saludActual)}%   |   📄 Expediente: {hojasRecolectadas}/{totalHojas}   |   ⏱️ {minutos:00}:{segundos:00}", estiloInfo);
+
+        GUIStyle estiloBtn = new GUIStyle(GUI.skin.button);
+        estiloBtn.fontSize = 14;
+        estiloBtn.fontStyle = FontStyle.Bold;
+
+        Color colorAnt = GUI.backgroundColor;
+
+        // BOTÓN 1: REANUDAR JUEGO
+        GUI.backgroundColor = new Color(0.18f, 0.64f, 0.36f);
+        if (GUI.Button(new Rect(x + 45, y + 108, ancho - 90, 44), "▶  REANUDAR JUEGO", estiloBtn))
+        {
+            ReanudarJuego();
+        }
+
+        // BOTÓN 2: REINICIAR NIVEL
+        GUI.backgroundColor = new Color(0.22f, 0.48f, 0.72f);
+        if (GUI.Button(new Rect(x + 45, y + 164, ancho - 90, 44), "🔄  REINICIAR NIVEL", estiloBtn))
+        {
+            ReiniciarNivel();
+        }
+
+        // BOTÓN 3: SILENCIAR / ACTIVAR AUDIO
+        bool silenciado = ControladorAudio.Instancia != null && ControladorAudio.Instancia.sonidoSilenciado;
+        string textoBtnSonido = silenciado ? "🔇  ACTIVAR AUDIO (SILENCIADO)" : "🔊  SILENCIAR AUDIO";
+        GUI.backgroundColor = new Color(0.55f, 0.44f, 0.18f);
+        if (GUI.Button(new Rect(x + 45, y + 220, ancho - 90, 44), textoBtnSonido, estiloBtn))
+        {
+            ControladorAudio.Instancia?.AlternarSonido();
+        }
+
+        // BOTÓN 4: MENÚ PRINCIPAL
+        GUI.backgroundColor = new Color(0.65f, 0.22f, 0.24f);
+        if (GUI.Button(new Rect(x + 45, y + 276, ancho - 90, 42), "🏠  MENÚ PRINCIPAL", estiloBtn))
+        {
+            SalirAlMenu();
+        }
+
+        GUI.backgroundColor = colorAnt;
+
+        // Atajos de teclado informativos
+        GUIStyle estiloAtajos = new GUIStyle(GUI.skin.label);
+        estiloAtajos.fontSize = 11;
+        estiloAtajos.alignment = TextAnchor.MiddleCenter;
+        estiloAtajos.normal.textColor = new Color(0.7f, 0.75f, 0.85f);
+        GUI.Label(new Rect(x, y + 338, ancho, 45), "Atajos de teclado:\n[Escape] o [P] para Pausa / Menú\n[Espacio] o [V] para Saltar | [Flechas] o [A/D] Moverse", estiloAtajos);
+    }
+
+    private void DibujarPantallaVictoria()
+    {
+        if (texOverlayOscuro == null) texOverlayOscuro = CrearTexturaColor(new Color(0.03f, 0.04f, 0.07f, 0.88f));
+        GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), texOverlayOscuro);
+
+        float ancho = 580f;
+        float alto = 490f;
+        float x = (Screen.width - ancho) / 2f;
+        float y = (Screen.height - alto) / 2f;
+
+        GUI.DrawTexture(new Rect(x, y, ancho, alto), texPanel);
+        if (texBordeDorado != null)
+        {
+            GUI.DrawTexture(new Rect(x, y, ancho, 4), texBordeDorado);
+            GUI.DrawTexture(new Rect(x, y + alto - 4, ancho, 4), texBordeDorado);
+        }
+
+        // Título Principal de Victoria
+        GUIStyle estiloTitulo = new GUIStyle(GUI.skin.label);
+        estiloTitulo.fontSize = 26;
+        estiloTitulo.fontStyle = FontStyle.Bold;
+        estiloTitulo.alignment = TextAnchor.MiddleCenter;
+        estiloTitulo.normal.textColor = new Color(1f, 0.88f, 0.2f);
+        GUI.Label(new Rect(x, y + 18, ancho, 36), "🏆  ¡NIVEL 2 COMPLETADO!  🏆", estiloTitulo);
+
+        // Subtítulo
+        GUIStyle estiloSub = new GUIStyle(GUI.skin.label);
+        estiloSub.fontSize = 15;
+        estiloSub.fontStyle = FontStyle.Bold;
+        estiloSub.alignment = TextAnchor.MiddleCenter;
+        estiloSub.normal.textColor = new Color(0.4f, 1f, 0.55f);
+        GUI.Label(new Rect(x, y + 54, ancho, 24), "¡EXPEDIENTE REUNIDO AL 100%!", estiloSub);
+
+        // Texto descriptivo y estadísticas
+        GUIStyle estiloTexto = new GUIStyle(GUI.skin.label);
+        estiloTexto.fontSize = 13;
+        estiloTexto.alignment = TextAnchor.MiddleCenter;
+        estiloTexto.normal.textColor = Color.white;
+        estiloTexto.wordWrap = true;
+
+        int minutos = Mathf.FloorToInt(tiempoTranscurrido / 60F);
+        int segundos = Mathf.FloorToInt(tiempoTranscurrido % 60F);
+        string textoVictoria = $"¡Increíble labor de investigación!\nHas descifrado los 10 acertijos y recuperado las 10 hojas del expediente oficial.\n\n" +
+                               $"📄 Hojas reunidas: {hojasRecolectadas} de {totalHojas}   |   ⏱️ Tiempo: {minutos:00}:{segundos:00}   |   ❤️ Línea de vida: {Mathf.RoundToInt(saludActual)}%\n\n" +
+                               $"Con el expediente completo, la brigada de búsqueda se dirige a la hacienda abandonada (Nivel 3).";
+
+        GUI.Label(new Rect(x + 25, y + 84, ancho - 50, 130), textoVictoria, estiloTexto);
+
+        GUIStyle estiloBtn = new GUIStyle(GUI.skin.button);
+        estiloBtn.fontSize = 14;
+        estiloBtn.fontStyle = FontStyle.Bold;
+
+        Color colorAnt = GUI.backgroundColor;
+
+        // BOTÓN 1: SIGUIENTE NIVEL (NIVEL 3)
+        GUI.backgroundColor = new Color(0.18f, 0.68f, 0.36f);
+        if (GUI.Button(new Rect(x + 60, y + 225, ancho - 120, 46), "▶  SIGUIENTE NIVEL (NIVEL 3)", estiloBtn))
+        {
+            IrAlSiguienteNivel();
+        }
+
+        // BOTÓN 2: REINICIAR NIVEL
+        GUI.backgroundColor = new Color(0.22f, 0.48f, 0.72f);
+        if (GUI.Button(new Rect(x + 60, y + 281, ancho - 120, 44), "🔄  REINICIAR NIVEL", estiloBtn))
+        {
+            ReiniciarNivel();
+        }
+
+        // BOTÓN 3: SILENCIAR / ACTIVAR AUDIO
+        bool silenciadoVic = ControladorAudio.Instancia != null && ControladorAudio.Instancia.sonidoSilenciado;
+        string textoSonidoVic = silenciadoVic ? "🔇  ACTIVAR AUDIO (SILENCIADO)" : "🔊  SILENCIAR AUDIO";
+        GUI.backgroundColor = new Color(0.55f, 0.44f, 0.18f);
+        if (GUI.Button(new Rect(x + 60, y + 335, ancho - 120, 42), textoSonidoVic, estiloBtn))
+        {
+            ControladorAudio.Instancia?.AlternarSonido();
+        }
+
+        // BOTÓN 4: MENÚ PRINCIPAL
+        GUI.backgroundColor = new Color(0.65f, 0.22f, 0.24f);
+        if (GUI.Button(new Rect(x + 60, y + 387, ancho - 120, 42), "🏠  MENÚ PRINCIPAL", estiloBtn))
+        {
+            SalirAlMenu();
+        }
+
+        GUI.backgroundColor = colorAnt;
+    }
+
+    private void DibujarPantallaDerrota()
+    {
+        if (texOverlayOscuro == null) texOverlayOscuro = CrearTexturaColor(new Color(0.03f, 0.04f, 0.07f, 0.85f));
+        GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), texOverlayOscuro);
+
+        float ancho = 480f;
+        float alto = 380f;
+        float x = (Screen.width - ancho) / 2f;
+        float y = (Screen.height - alto) / 2f;
+
+        GUI.DrawTexture(new Rect(x, y, ancho, alto), texPanel);
+        if (texBordeDorado != null)
+        {
+            GUI.DrawTexture(new Rect(x, y, ancho, 4), texBordeDorado);
+            GUI.DrawTexture(new Rect(x, y + alto - 4, ancho, 4), texBordeDorado);
+        }
+
+        GUIStyle estiloTitulo = new GUIStyle(GUI.skin.label);
+        estiloTitulo.fontSize = 24;
+        estiloTitulo.fontStyle = FontStyle.Bold;
+        estiloTitulo.alignment = TextAnchor.MiddleCenter;
+        estiloTitulo.normal.textColor = new Color(1f, 0.35f, 0.35f);
+        GUI.Label(new Rect(x, y + 22, ancho, 35), "💔 LÍNEA DE VIDA AGOTADA", estiloTitulo);
+
+        GUIStyle estiloTexto = new GUIStyle(GUI.skin.label);
+        estiloTexto.fontSize = 13;
+        estiloTexto.alignment = TextAnchor.MiddleCenter;
+        estiloTexto.normal.textColor = new Color(0.9f, 0.9f, 0.9f);
+        estiloTexto.wordWrap = true;
+
+        string textoDerrota = "Los obstáculos móviles redujeron tu Línea de vida a cero.\n" +
+                              "Una madre nunca se rinde: recupera fuerzas con las botellas de agua y vuelve a intentarlo.";
+
+        GUI.Label(new Rect(x + 25, y + 68, ancho - 50, 75), textoDerrota, estiloTexto);
+
+        GUIStyle estiloBtn = new GUIStyle(GUI.skin.button);
+        estiloBtn.fontSize = 14;
+        estiloBtn.fontStyle = FontStyle.Bold;
+
+        Color colorAnt = GUI.backgroundColor;
+
+        // Reiniciar
+        GUI.backgroundColor = new Color(0.18f, 0.64f, 0.36f);
+        if (GUI.Button(new Rect(x + 50, y + 160, ancho - 100, 44), "🔄  REINTENTAR NIVEL", estiloBtn))
+        {
+            ReiniciarNivel();
+        }
+
+        // Quitar / Activar Sonido
+        bool silenciadoDer = ControladorAudio.Instancia != null && ControladorAudio.Instancia.sonidoSilenciado;
+        string textoSonidoDer = silenciadoDer ? "🔇  ACTIVAR AUDIO" : "🔊  SILENCIAR AUDIO";
+        GUI.backgroundColor = new Color(0.55f, 0.44f, 0.18f);
+        if (GUI.Button(new Rect(x + 50, y + 214, ancho - 100, 42), textoSonidoDer, estiloBtn))
+        {
+            ControladorAudio.Instancia?.AlternarSonido();
+        }
+
+        // Salir
+        GUI.backgroundColor = new Color(0.65f, 0.22f, 0.24f);
+        if (GUI.Button(new Rect(x + 50, y + 266, ancho - 100, 40), "🏠  MENÚ PRINCIPAL", estiloBtn))
+        {
+            SalirAlMenu();
+        }
+
+        GUI.backgroundColor = colorAnt;
+    }
+}
+

@@ -1,18 +1,51 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.UI;
+#endif
 
 /// <summary>
-/// Controla la Pantalla de Inicio decorada original de Madres Buscadoras.
-/// - Diseño limpio y original: Únicamente el botón de JUGAR.
-/// - Reproduce el sonido de los desaparecidos en México en segundo plano.
-/// - Respiración cinemática del fondo, brasas flotantes y pulsación del botón.
-/// - Al hacer clic en JUGAR o pulsar Enter/Espacio/clic en pantalla inicia el juego inmediatamente en Nivel_1.
+/// Controla la Pantalla de Inicio (Menu Principal) de Madres Buscadoras ("Hasta Encontrarles").
+/// - Compatible 100% con WebGL, Windows y Movil (carga portada y boton JUGAR desde Resources).
+/// - Evita que el clic de "Run Game" del navegador salte automaticamente al Nivel 1.
+/// - Garantiza que el Menu Principal con el boton JUGAR sea siempre la primera pantalla al iniciar el juego.
 /// </summary>
 public class StartScreenManager : MonoBehaviour
 {
+    private static bool menuMostradoEnEstaSesion = false;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    private static void GarantizarMenuPrincipalAlInicio()
+    {
+        Scene escenaActual = SceneManager.GetActiveScene();
+        if (escenaActual.name == "MenuInicio")
+        {
+            menuMostradoEnEstaSesion = true;
+            if (Object.FindAnyObjectByType<StartScreenManager>() == null)
+            {
+                GameObject go = new GameObject("StartScreenManager_Auto");
+                go.AddComponent<StartScreenManager>();
+            }
+            return;
+        }
+
+        // Si el juego arranco directamente en Nivel_1 sin haber pasado por el Menu Principal, cargar MenuInicio primero
+        if (!menuMostradoEnEstaSesion && escenaActual.name.Contains("Nivel_1"))
+        {
+            menuMostradoEnEstaSesion = true;
+            if (Application.CanStreamedLevelBeLoaded("MenuInicio"))
+            {
+                SceneManager.LoadScene("MenuInicio");
+                return;
+            }
+        }
+    }
+
     [Header("Escena Objetivo")]
     public string targetSceneName = "Nivel_1";
     public bool loadSceneOnStart = true;
@@ -22,11 +55,14 @@ public class StartScreenManager : MonoBehaviour
     public RectTransform backgroundTransform;
     public Image backgroundImage;
     public Button playButton;
+    public Text playButtonText;
+    public GameObject hudToEnable;
     public Image buttonGlowImage;
 
     [Header("Animacion del Boton")]
     public float pulseSpeed = 3.5f;
     public float pulseScaleAmount = 0.05f;
+    public float pulseAmount = 0.04f;
 
     [Header("Respiracion Cinematica")]
     public bool enableBackgroundBreathe = true;
@@ -38,17 +74,17 @@ public class StartScreenManager : MonoBehaviour
     public int emberCount = 22;
 
     [Header("Transicion")]
-    public float fadeDuration = 0.4f;
+    public float fadeDuration = 0.35f;
 
-    bool gameStarted = false;
-    Vector3 buttonBaseScale = Vector3.one;
-    Vector3 bgBaseScale = Vector3.one;
-    bool isHovered = false;
+    private bool gameStarted = false;
+    private float tiempoEnMenu = 0f;
+    private Vector3 buttonBaseScale = Vector3.one;
+    private Vector3 bgBaseScale = Vector3.one;
+    private bool isHovered = false;
 
-    // Sprite circular suave para las brasas
-    static Sprite softCircleSprite;
+    private static Sprite softCircleSprite;
 
-    class Ember
+    private class Ember
     {
         public RectTransform rect;
         public Image img;
@@ -58,17 +94,37 @@ public class StartScreenManager : MonoBehaviour
         public float seed;
         public float baseAlpha;
     }
-    List<Ember> embers = new List<Ember>();
+    private List<Ember> embers = new List<Ember>();
 
     void Awake()
     {
+        menuMostradoEnEstaSesion = true;
+        tiempoEnMenu = 0f;
+        gameStarted = false;
+
+        AsegurarEventSystemCompatible();
+
+        Canvas parentCanvas = GetComponentInParent<Canvas>() ?? GetComponent<Canvas>() ?? Object.FindAnyObjectByType<Canvas>();
+        if (parentCanvas == null)
+        {
+            GameObject cGO = new GameObject("Canvas_MenuPrincipal");
+            parentCanvas = cGO.AddComponent<Canvas>();
+            parentCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            parentCanvas.sortingOrder = 100;
+            CanvasScaler cs = cGO.AddComponent<CanvasScaler>();
+            cs.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            cs.referenceResolution = new Vector2(1920f, 1080f);
+            cs.matchWidthOrHeight = 0.5f;
+            cGO.AddComponent<GraphicRaycaster>();
+        }
+
         if (canvasGroup == null)
-            canvasGroup = GetComponent<CanvasGroup>();
+            canvasGroup = GetComponent<CanvasGroup>() ?? parentCanvas.GetComponent<CanvasGroup>();
 
         // 1. Asegurar referencia del fondo
         if (backgroundImage == null)
         {
-            var images = GetComponentsInChildren<Image>(true);
+            var images = parentCanvas.GetComponentsInChildren<Image>(true);
             foreach (var img in images)
             {
                 if (img.gameObject.name.Contains("Background"))
@@ -81,73 +137,50 @@ public class StartScreenManager : MonoBehaviour
         }
         if (backgroundImage == null)
         {
-            var bgGO = GameObject.Find("Background_Artwork");
-            if (bgGO != null)
-            {
-                backgroundTransform = bgGO.GetComponent<RectTransform>();
-                backgroundImage = bgGO.GetComponent<Image>();
-            }
-        }
-        if (backgroundImage == null)
-        {
-            Canvas parentCanvas = GetComponentInParent<Canvas>() ?? Object.FindAnyObjectByType<Canvas>();
-            if (parentCanvas != null)
-            {
-                GameObject bgGO = new GameObject("Background_Artwork");
-                bgGO.transform.SetParent(parentCanvas.transform, false);
-                bgGO.transform.SetAsFirstSibling();
-                backgroundTransform = bgGO.AddComponent<RectTransform>();
-                backgroundTransform.anchorMin = Vector2.zero;
-                backgroundTransform.anchorMax = Vector2.one;
-                backgroundTransform.offsetMin = Vector2.zero;
-                backgroundTransform.offsetMax = Vector2.zero;
-                bgGO.AddComponent<CanvasRenderer>();
-                backgroundImage = bgGO.AddComponent<Image>();
-            }
+            GameObject bgGO = new GameObject("Background_Artwork");
+            bgGO.transform.SetParent(parentCanvas.transform, false);
+            bgGO.transform.SetAsFirstSibling();
+            backgroundTransform = bgGO.AddComponent<RectTransform>();
+            backgroundTransform.anchorMin = Vector2.zero;
+            backgroundTransform.anchorMax = Vector2.one;
+            backgroundTransform.offsetMin = Vector2.zero;
+            backgroundTransform.offsetMax = Vector2.zero;
+            backgroundImage = bgGO.AddComponent<Image>();
         }
 
         if (backgroundTransform != null)
             bgBaseScale = backgroundTransform.localScale;
 
-        // 2. Carga infalible de la portada decorada
+        // 2. Cargar portada decorada (Compatible con WebGL mediante Resources.Load)
         EnsureBackgroundLoaded();
 
-        // 3. Reproducir el sonido de los desaparecidos en México
+        // 3. Reproducir musica de menu
         if (AudioManager.Instance != null)
         {
             AudioManager.Instance.PlayDesaparecidosBGM();
         }
 
-        // 4. Configurar Boton JUGAR original
+        // 4. Configurar Boton JUGAR visible e interactivo
         if (playButton == null)
-            playButton = GetComponentInChildren<Button>(true);
+            playButton = parentCanvas.GetComponentInChildren<Button>(true);
         if (playButton == null)
             playButton = GameObject.Find("Button_START")?.GetComponent<Button>();
 
         if (playButton == null)
         {
-            Canvas parentCanvas = GetComponentInParent<Canvas>() ?? Object.FindAnyObjectByType<Canvas>();
-            if (parentCanvas != null)
-            {
-                GameObject btnGO = new GameObject("Button_START");
-                btnGO.transform.SetParent(parentCanvas.transform, false);
-                btnGO.transform.SetAsLastSibling();
-                RectTransform btnRT = btnGO.AddComponent<RectTransform>();
-                btnRT.anchorMin = new Vector2(0.36f, 0.42f);
-                btnRT.anchorMax = new Vector2(0.64f, 0.58f);
-                btnRT.offsetMin = Vector2.zero;
-                btnRT.offsetMax = Vector2.zero;
-                btnGO.AddComponent<CanvasRenderer>();
-                Image bImg = btnGO.AddComponent<Image>();
-                bImg.color = new Color(1f, 1f, 1f, 0.001f);
-                playButton = btnGO.AddComponent<Button>();
-            }
+            GameObject btnGO = new GameObject("Button_START");
+            btnGO.transform.SetParent(parentCanvas.transform, false);
+            btnGO.transform.SetAsLastSibling();
+            RectTransform btnRT = btnGO.AddComponent<RectTransform>();
+            btnRT.anchorMin = new Vector2(0.35f, 0.14f);
+            btnRT.anchorMax = new Vector2(0.65f, 0.30f);
+            btnRT.offsetMin = Vector2.zero;
+            btnRT.offsetMax = Vector2.zero;
+            Image bImg = btnGO.AddComponent<Image>();
+            bImg.color = Color.white;
+            playButton = btnGO.AddComponent<Button>();
         }
 
-        // Asegurar escala interactiva en Canvas y CanvasGroup
-        if (transform.localScale == Vector3.zero) transform.localScale = Vector3.one;
-        Canvas pCanvas = GetComponentInParent<Canvas>() ?? GetComponent<Canvas>();
-        if (pCanvas != null && pCanvas.transform.localScale == Vector3.zero) pCanvas.transform.localScale = Vector3.one;
         if (canvasGroup != null)
         {
             canvasGroup.interactable = true;
@@ -160,22 +193,28 @@ public class StartScreenManager : MonoBehaviour
             if (playButton.transform.localScale == Vector3.zero)
                 playButton.transform.localScale = Vector3.one;
 
+            // Posicionar el boton JUGAR en una zona clara y destacada de la portada
+            RectTransform rtBtn = playButton.GetComponent<RectTransform>();
+            if (rtBtn != null)
+            {
+                rtBtn.anchorMin = new Vector2(0.36f, 0.12f);
+                rtBtn.anchorMax = new Vector2(0.64f, 0.28f);
+                rtBtn.anchoredPosition = Vector2.zero;
+                rtBtn.sizeDelta = Vector2.zero;
+            }
+
             buttonBaseScale = playButton.transform.localScale;
             playButton.interactable = true;
             playButton.onClick.RemoveAllListeners();
             playButton.onClick.AddListener(StartGame);
 
-            // Asignar el sprite decorado de btn_jugar_decorado si está disponible
             bool hasDecoratedSprite = false;
             Image btnImg = playButton.GetComponent<Image>();
             if (btnImg != null)
             {
                 btnImg.raycastTarget = true;
-                Sprite bSprite = Resources.Load<Sprite>("btn_jugar_decorado");
-#if UNITY_EDITOR
-                if (bSprite == null)
-                    bSprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>("Assets/Sprites/UI/btn_jugar_decorado.png");
-#endif
+                Sprite bSprite = CargarSpriteRecurso("btn_jugar_decorado");
+                if (bSprite == null) bSprite = CargarSpriteRecurso("btn_start");
                 if (bSprite != null)
                 {
                     btnImg.sprite = bSprite;
@@ -183,61 +222,112 @@ public class StartScreenManager : MonoBehaviour
                     btnImg.preserveAspect = true;
                     hasDecoratedSprite = true;
                 }
+                else
+                {
+                    btnImg.color = new Color(0.16f, 0.62f, 0.34f, 0.96f);
+                }
             }
 
-            // Ocultar texto duplicado si ya se cargó el sprite decorado con "JUGAR"
             Text btnTxt = playButton.GetComponentInChildren<Text>(true);
             if (hasDecoratedSprite)
             {
                 if (btnTxt != null) btnTxt.gameObject.SetActive(false);
             }
-            else if (btnTxt == null)
+            else
             {
-                GameObject txtGO = new GameObject("BtnText");
-                txtGO.transform.SetParent(playButton.transform, false);
-                btnTxt = txtGO.AddComponent<Text>();
-                Font f = null;
-                try { f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"); } catch {}
-                if (f == null) { try { f = Resources.GetBuiltinResource<Font>("Arial.ttf"); } catch {} }
+                if (btnTxt == null)
+                {
+                    GameObject txtGO = new GameObject("BtnText");
+                    txtGO.transform.SetParent(playButton.transform, false);
+                    btnTxt = txtGO.AddComponent<Text>();
+                    RectTransform rt = txtGO.GetComponent<RectTransform>();
+                    rt.anchorMin = Vector2.zero;
+                    rt.anchorMax = Vector2.one;
+                    rt.offsetMin = Vector2.zero;
+                    rt.offsetMax = Vector2.zero;
+                }
+                Font f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                if (f == null) f = Font.CreateDynamicFontFromOSFont("Arial", 32);
                 btnTxt.font = f;
-                btnTxt.text = "JUGAR";
-                btnTxt.fontSize = 38;
+                btnTxt.text = "▶ JUGAR";
+                btnTxt.fontSize = 40;
                 btnTxt.fontStyle = FontStyle.Bold;
                 btnTxt.alignment = TextAnchor.MiddleCenter;
                 btnTxt.color = Color.white;
-                RectTransform rt = txtGO.GetComponent<RectTransform>();
-                rt.anchorMin = Vector2.zero;
-                rt.anchorMax = Vector2.one;
-                rt.offsetMin = Vector2.zero;
-                rt.offsetMax = Vector2.zero;
+                btnTxt.gameObject.SetActive(true);
             }
 
-            // Eventos de hover para feedback visual inmediato
-            var trigger = playButton.gameObject.GetComponent<UnityEngine.EventSystems.EventTrigger>();
-            if (trigger == null) trigger = playButton.gameObject.AddComponent<UnityEngine.EventSystems.EventTrigger>();
+            var trigger = playButton.gameObject.GetComponent<EventTrigger>();
+            if (trigger == null) trigger = playButton.gameObject.AddComponent<EventTrigger>();
 
-            var enter = new UnityEngine.EventSystems.EventTrigger.Entry { eventID = UnityEngine.EventSystems.EventTriggerType.PointerEnter };
+            var enter = new EventTrigger.Entry { eventID = EventTriggerType.PointerEnter };
             enter.callback.AddListener((_) => { isHovered = true; });
             trigger.triggers.Add(enter);
 
-            var exit = new UnityEngine.EventSystems.EventTrigger.Entry { eventID = UnityEngine.EventSystems.EventTriggerType.PointerExit };
+            var exit = new EventTrigger.Entry { eventID = EventTriggerType.PointerExit };
             exit.callback.AddListener((_) => { isHovered = false; });
             trigger.triggers.Add(exit);
         }
 
         Time.timeScale = 1f;
 
-        // 5. Crear brasas flotantes
         if (enableEmbers)
         {
             CreateProceduralEmbers();
         }
     }
 
+    private void AsegurarEventSystemCompatible()
+    {
+        EventSystem es = Object.FindAnyObjectByType<EventSystem>();
+        if (es == null)
+        {
+            GameObject esGO = new GameObject("EventSystem");
+            es = esGO.AddComponent<EventSystem>();
+        }
+#if ENABLE_INPUT_SYSTEM
+        StandaloneInputModule legacyMod = es.GetComponent<StandaloneInputModule>();
+        if (legacyMod != null) Destroy(legacyMod);
+        if (es.GetComponent<InputSystemUIInputModule>() == null)
+            es.gameObject.AddComponent<InputSystemUIInputModule>();
+#else
+        if (es.GetComponent<StandaloneInputModule>() == null)
+            es.gameObject.AddComponent<StandaloneInputModule>();
+#endif
+    }
+
+    private static Sprite CargarSpriteRecurso(string nombreSinExtension)
+    {
+        Sprite sp = Resources.Load<Sprite>(nombreSinExtension);
+        if (sp != null) return sp;
+
+        Texture2D tex = Resources.Load<Texture2D>(nombreSinExtension);
+        if (tex != null)
+        {
+            tex.filterMode = FilterMode.Bilinear;
+            tex.wrapMode = TextureWrapMode.Clamp;
+            return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+        }
+        return null;
+    }
+
     void EnsureBackgroundLoaded()
     {
         if (backgroundImage == null) return;
 
+        // 1. Cargar desde Resources (Funciona en WebGL, Windows y Movil)
+        Sprite spDecorada = CargarSpriteRecurso("pantalla_inicio_decorada");
+        if (spDecorada == null) spDecorada = CargarSpriteRecurso("pantalla_inicio_bg");
+        if (spDecorada == null) spDecorada = CargarSpriteRecurso("Sprites/poster_22_desaparecidos");
+
+        if (spDecorada != null)
+        {
+            backgroundImage.sprite = spDecorada;
+            backgroundImage.color = Color.white;
+            return;
+        }
+
+        // 2. Respaldo en Editor por ruta de archivo
         string path = System.IO.Path.Combine(Application.dataPath, "Sprites/UI/pantalla_inicio_decorada.png");
         if (!System.IO.File.Exists(path))
             path = System.IO.Path.Combine(Application.dataPath, "Sprites/UI/pantalla_inicio_bg.png");
@@ -250,16 +340,9 @@ public class StartScreenManager : MonoBehaviour
             {
                 texture.filterMode = FilterMode.Bilinear;
                 texture.wrapMode = TextureWrapMode.Clamp;
-                Sprite newSprite = Sprite.Create(
-                    texture,
-                    new Rect(0, 0, texture.width, texture.height),
-                    new Vector2(0.5f, 0.5f),
-                    100f
-                );
-                newSprite.name = "pantalla_inicio_decorada";
+                Sprite newSprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f), 100f);
                 backgroundImage.sprite = newSprite;
                 backgroundImage.color = Color.white;
-                return;
             }
         }
     }
@@ -336,9 +419,10 @@ public class StartScreenManager : MonoBehaviour
     {
         if (gameStarted) return;
 
+        tiempoEnMenu += Time.unscaledDeltaTime;
         float t = Time.unscaledTime;
 
-        // 1. Animacion del Boton (Pulso + Resplandor + Hover)
+        // 1. Animacion del Boton JUGAR (Pulso + Hover)
         if (playButton != null)
         {
             float targetHoverScale = isHovered ? 1.08f : 1.0f;
@@ -396,18 +480,24 @@ public class StartScreenManager : MonoBehaviour
             }
         }
 
-        // 4. Iniciar inmediatamente con un solo clic, toque o cualquier tecla
-        bool wantsStart = Input.GetMouseButtonDown(0) || Input.GetMouseButton(0) || Input.anyKeyDown || Input.touchCount > 0;
-#if ENABLE_INPUT_SYSTEM
-        var mouse = UnityEngine.InputSystem.Mouse.current;
-        var kb = UnityEngine.InputSystem.Keyboard.current;
-        var touch = UnityEngine.InputSystem.Touchscreen.current;
-        if (mouse != null && (mouse.leftButton.wasPressedThisFrame || mouse.leftButton.isPressed)) wantsStart = true;
-        if (kb != null && kb.anyKey.wasPressedThisFrame) wantsStart = true;
-        if (touch != null && (touch.primaryTouch.press.wasPressedThisFrame || touch.primaryTouch.press.isPressed)) wantsStart = true;
-#endif
+        // 4. Esperar al menos 1.2 segundos para que el clic de "Run Game" del navegador NO salte el menu principal.
+        // Despues de 1.2s, el jugador inicia dando clic en el boton JUGAR o presionando Enter / Espacio.
+        if (tiempoEnMenu < 1.2f) return;
 
-        if (wantsStart)
+        bool presionoEnterOEspacio = false;
+#if ENABLE_INPUT_SYSTEM
+        var kb = Keyboard.current;
+        if (kb != null && (kb.enterKey.wasPressedThisFrame || kb.spaceKey.wasPressedThisFrame))
+            presionoEnterOEspacio = true;
+#endif
+        try
+        {
+            if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.Space))
+                presionoEnterOEspacio = true;
+        }
+        catch { }
+
+        if (presionoEnterOEspacio)
         {
             StartGame();
         }
@@ -415,9 +505,9 @@ public class StartScreenManager : MonoBehaviour
 
     public void StartGame()
     {
-        if (gameStarted) return;
+        if (gameStarted || tiempoEnMenu < 0.35f) return;
         gameStarted = true;
-        Debug.Log("[StartScreenManager] ¡Iniciando Nivel 1!");
+        Debug.Log("[StartScreenManager] ¡Boton JUGAR presionado! Iniciando Nivel 1...");
 
         if (AudioManager.Instance != null)
         {
@@ -426,7 +516,6 @@ public class StartScreenManager : MonoBehaviour
 
         Time.timeScale = 1f;
         string target = string.IsNullOrEmpty(targetSceneName) ? "Nivel_1" : targetSceneName;
-        Debug.Log($"[StartScreenManager] Cargando escena de juego inmediatamente: {target}");
 #if UNITY_EDITOR
         if (System.IO.File.Exists("Assets/Nivel_1.unity"))
         {
@@ -443,53 +532,7 @@ public class StartScreenManager : MonoBehaviour
         }
         catch (System.Exception e)
         {
-            Debug.LogWarning($"[StartScreenManager] No se pudo cargar por nombre '{target}', intentando índice 1: {e.Message}");
-            SceneManager.LoadScene(1);
-        }
-    }
-
-    IEnumerator StartGameRoutine()
-    {
-        Time.timeScale = 1f;
-
-        // Efecto punch en el boton
-        if (playButton != null)
-        {
-            float elapsedPunch = 0f;
-            Vector3 startScale = playButton.transform.localScale;
-            Vector3 pressedScale = buttonBaseScale * 0.90f;
-            while (elapsedPunch < 0.12f)
-            {
-                elapsedPunch += Time.unscaledDeltaTime;
-                playButton.transform.localScale = Vector3.Lerp(startScale, pressedScale, elapsedPunch / 0.12f);
-                yield return null;
-            }
-        }
-
-        // Desvanecimiento suave
-        if (canvasGroup != null)
-        {
-            float elapsed = 0f;
-            float startAlpha = canvasGroup.alpha;
-            while (elapsed < fadeDuration)
-            {
-                elapsed += Time.unscaledDeltaTime;
-                canvasGroup.alpha = Mathf.Lerp(startAlpha, 0f, elapsed / fadeDuration);
-                yield return null;
-            }
-            canvasGroup.alpha = 0f;
-        }
-
-        string target = string.IsNullOrEmpty(targetSceneName) ? "Nivel_1" : targetSceneName;
-        Debug.Log($"[StartScreenManager] Cargando escena de juego: {target}");
-
-        try
-        {
-            SceneManager.LoadScene(target);
-        }
-        catch (System.Exception ex)
-        {
-            Debug.LogWarning($"[StartScreenManager] Carga por nombre '{target}' falló ({ex.Message}). Intentando por índice 1...");
+            Debug.LogWarning($"[StartScreenManager] No se pudo cargar por nombre '{target}', intentando indice 1: {e.Message}");
             SceneManager.LoadScene(1);
         }
     }
